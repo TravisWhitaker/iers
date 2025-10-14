@@ -61,6 +61,7 @@ test-suite parse
                     , async
                     , attoparsec
                     , bytestring
+                    , containers
                     , directory
                     , filepath
                     , iers

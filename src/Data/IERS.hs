@@ -130,7 +130,9 @@ data BulletinA = BulletinA {
   , baLeapSeconds :: CurrentLeapSeconds
   , baREOP :: IM.IntMap RapidEOP
   , baPEOP :: IM.IntMap PredictedEOP
+    -- | Only in newer reports.
   , baNEOS :: IM.IntMap NEOS
+    -- | Only in newer reports.
   , baIAU :: IM.IntMap IAU
   } deriving stock ( Generic
                    , Show
@@ -262,21 +264,27 @@ parseDUT1Val = zero <|> nonZero
           nonZero = do
             sign <- parseSign 
             string_ "0." 
-            (sign <$> A.decimal) 
+            sign <$> A.decimal 
+
+parseDUT1s :: A.Parser (IM.IntMap DUT1)
+parseDUT1s = fromListByDay dut1ValidFrom <$> A.many1 parseDUT1
 
 parseDUT1 :: A.Parser DUT1
 parseDUT1 = do
-    space1_ 
-    string_ "DUT1=" 
-    skipLine 
-    space1_ 
-    string_ "=" 
-    space1_ 
+    space1_
+    string_ "="
+    space1_
     dut1UT1MinusUTCDeciS <- parseDUT1Val 
     string_ " seconds beginning " 
     dut1ValidFrom <- parseGregorianDate 
     skipLine 
     pure DUT1{..}
+
+seekToDUT1Header :: A.Parser ()
+seekToDUT1Header = do
+    space1_
+    string_ "DUT1="
+    skipLine
 
 parseCurrentLeapSeconds :: A.Parser CurrentLeapSeconds
 parseCurrentLeapSeconds = do
@@ -486,7 +494,8 @@ parseBulletinA = do
     space1_
     baNumber <- parseNumber 
     skipLine
-    baDUT1 <- skipLinesUntil parseDUT1 
+    skipLinesUntil seekToDUT1Header
+    baDUT1 <- parseDUT1s
     -- There are no lines between DUT1 and leap seconds
     baLeapSeconds <- parseCurrentLeapSeconds
     skipLinesUntil seekToREOPHeader 
