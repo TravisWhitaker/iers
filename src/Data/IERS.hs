@@ -1,10 +1,15 @@
-{-# LANGUAGE DeriveGeneric
+{-# LANGUAGE DeriveAnyClass
+           , DeriveGeneric
            , DerivingStrategies
+           , GeneralizedNewtypeDeriving
            , OverloadedStrings
            , RecordWildCards
+           , StandaloneDeriving
            #-}
 
 module Data.IERS where
+
+import Codec.Serialise
 
 import Control.Applicative
 
@@ -19,6 +24,7 @@ import Data.Functor
 import qualified Data.IntMap.Strict as IM
 
 import Data.Time.Calendar
+import Data.Time.Clock
 
 import GHC.Generics
 
@@ -34,6 +40,9 @@ insByDay f x = IM.insert (dayToKey (f x)) x
 fromListByDay :: (a -> Day) -> [a] -> IM.IntMap a
 fromListByDay f = IM.fromList . fmap (\x -> (dayToKey (f x), x))
 
+-- Orphans
+deriving newtype instance Serialise Day
+
 data DUT1 = DUT1 {
     dut1ValidFrom :: Day
     -- | UT1 - UTC in increments of 0.1s
@@ -41,6 +50,7 @@ data DUT1 = DUT1 {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
 
 data CurrentLeapSeconds = CurrentLeapSeconds {
     clsValidFrom :: Day
@@ -49,6 +59,7 @@ data CurrentLeapSeconds = CurrentLeapSeconds {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
 
 data RapidEOP = RapidEOP {
     reopDay :: Day
@@ -67,6 +78,7 @@ data RapidEOP = RapidEOP {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
 
 data PredictedEOP = PredictedEOP {
     peopDay :: Day
@@ -78,6 +90,7 @@ data PredictedEOP = PredictedEOP {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
 
 data NEOS = NEOS {
     neosDay :: Day
@@ -92,6 +105,7 @@ data NEOS = NEOS {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
 
 data IAU = IAU {
     iauDay :: Day
@@ -106,12 +120,14 @@ data IAU = IAU {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
 
 data BulletinA = BulletinA {
     baPublishedDate :: Day
   , baVol :: String
   , baNumber :: Int
-  , baDUT1 :: DUT1
+  , baDUT1 :: IM.IntMap DUT1
+  , baLeapSeconds :: CurrentLeapSeconds
   , baREOP :: IM.IntMap RapidEOP
   , baPEOP :: IM.IntMap PredictedEOP
   , baNEOS :: IM.IntMap NEOS
@@ -119,6 +135,19 @@ data BulletinA = BulletinA {
   } deriving stock ( Generic
                    , Show
                    )
+    deriving anyclass Serialise
+
+type BulletinASet = IM.IntMap BulletinA
+
+data EOPQueryResult = EOPQueryResult {
+    eqrTime :: Day
+    -- | arcseconds
+  , eqrX :: Double
+    -- | arcseconds
+  , eqrY :: Double
+    -- | UT1 - UTC in seconds
+  , eqrDUT :: Double
+  } 
 
 char_ :: Char -> A.Parser ()
 char_ = void . A.char
@@ -248,6 +277,22 @@ parseDUT1 = do
     dut1ValidFrom <- parseGregorianDate 
     skipLine 
     pure DUT1{..}
+
+parseCurrentLeapSeconds :: A.Parser CurrentLeapSeconds
+parseCurrentLeapSeconds = do
+    space1_
+    string_ "Beginning"
+    space1_
+    clsValidFrom <- parseGregorianDate
+    skipLine
+    space1_
+    string_ "TAI-UTC"
+    A.skipWhile (/= '=')
+    string_ "="
+    space1_
+    clsTAIMinusUTC <- A.decimal
+    skipLine
+    pure CurrentLeapSeconds{..}
     
 parseREOPs :: A.Parser (IM.IntMap RapidEOP)
 parseREOPs = fromListByDay reopDay <$> A.many1 parseREOP
@@ -442,6 +487,8 @@ parseBulletinA = do
     baNumber <- parseNumber 
     skipLine
     baDUT1 <- skipLinesUntil parseDUT1 
+    -- There are no lines between DUT1 and leap seconds
+    baLeapSeconds <- parseCurrentLeapSeconds
     skipLinesUntil seekToREOPHeader 
     baREOP <- parseREOPs 
     skipLinesUntil seekToPEOPHeader 

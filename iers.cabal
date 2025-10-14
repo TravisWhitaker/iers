@@ -48,6 +48,7 @@ library
                     , containers
                     , bytestring
                     , req
+                    , serialise
                     , time
     hs-source-dirs:   src
 
