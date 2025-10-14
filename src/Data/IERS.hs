@@ -8,6 +8,8 @@ module Data.IERS where
 
 import Control.Applicative
 
+import Control.Monad
+
 import qualified Data.ByteString.Char8 as BC
 
 import qualified Data.Attoparsec.ByteString.Char8 as A
@@ -147,7 +149,7 @@ skipLines :: A.Parser ()
 skipLines = A.skipMany1 skipLine
 
 skipLinesUntil :: A.Parser a -> A.Parser a
-skipLinesUntil p = p <|> (skipLine *> skipLinesUntil p)
+skipLinesUntil p = p <|> (skipLine *> skipLinesUntil p) 
 
 space1_ :: A.Parser ()
 space1_ = void $ A.takeWhile1 A.isSpace
@@ -180,6 +182,18 @@ parseMonthOfYear = A.choice
   , A.string "October" $> 10
   , A.string "November" $> 11
   , A.string "December" $> 12
+  , A.string "Jan" $> 1
+  , A.string "Feb" $> 2
+  , A.string "Mar" $> 3
+  , A.string "Apr" $> 4
+  , A.string "Jun" $> 6
+  , A.string "Jul" $> 7
+  , A.string "Aug" $> 8
+  , A.string "Sept" $> 9
+  , A.string "Sep" $> 9
+  , A.string "Oct" $> 10
+  , A.string "Nov" $> 11
+  , A.string "Dec" $> 12
   ]
 
 parseYear :: A.Parser Year
@@ -187,11 +201,11 @@ parseYear = A.decimal
 
 parseGregorianDate :: A.Parser Day
 parseGregorianDate = do
-    dom <- parseDayOfMonth
-    space1_
-    moy <- parseMonthOfYear
-    space1_
-    y <- parseYear
+    dom <- parseDayOfMonth 
+    space1_ 
+    moy <- parseMonthOfYear 
+    space1_ 
+    y <- parseYear 
     case fromGregorianValid y moy dom of
         Nothing -> fail ("Invalid Gregorian date " <> show (y, moy, dom))
         Just d -> pure d
@@ -213,19 +227,26 @@ parseSign :: Num a => A.Parser (a -> a)
 parseSign = char_ '+' $> id
         <|> char_ '-' $> negate
 
+parseDUT1Val :: Integral a => A.Parser a
+parseDUT1Val = zero <|> nonZero
+    where zero = string_ "0.0" $> 0
+          nonZero = do
+            sign <- parseSign 
+            string_ "0." 
+            (sign <$> A.decimal) 
+
 parseDUT1 :: A.Parser DUT1
 parseDUT1 = do
-    space1_
-    string_ "DUT1="
-    skipLine
-    space1_
-    string_ "= "
-    sign <- parseSign
-    string_ "0."
-    dut1UT1MinusUTCDeciS <- (sign <$> A.decimal)
-    string_ " seconds beginning "
-    dut1ValidFrom <- parseGregorianDate
-    skipLine
+    space1_ 
+    string_ "DUT1=" 
+    skipLine 
+    space1_ 
+    string_ "=" 
+    space1_ 
+    dut1UT1MinusUTCDeciS <- parseDUT1Val 
+    string_ " seconds beginning " 
+    dut1ValidFrom <- parseGregorianDate 
+    skipLine 
     pure DUT1{..}
     
 parseREOPs :: A.Parser (IM.IntMap RapidEOP)
@@ -233,13 +254,12 @@ parseREOPs = fromListByDay reopDay <$> A.many1 parseREOP
 
 parseREOP :: A.Parser RapidEOP
 parseREOP = do
-    (do space1_
-        decimal_
-        space1_
-        decimal_
-        space1_
-        decimal_
-        )
+    space1_
+    decimal_
+    space1_
+    decimal_
+    space1_
+    decimal_
     space1_
     reopDay <- parseMJD
     space1_
@@ -399,22 +419,37 @@ seekToIAUHeader = do
     string_ "(msec. of arc)"
     skipLine
 
+seekAndParseNEOSs :: A.Parser (IM.IntMap NEOS)
+seekAndParseNEOSs = have <|> haveNot
+    where have = do
+            skipLinesUntil seekToNEOSHeader
+            parseNEOSs
+          haveNot = pure mempty
+
+seekAndParseIAUs :: A.Parser (IM.IntMap IAU)
+seekAndParseIAUs = have <|> haveNot
+    where have = do
+            skipLinesUntil seekToIAUHeader
+            parseIAUs
+          haveNot = pure mempty
+
 parseBulletinA :: A.Parser BulletinA
 parseBulletinA = do
-    baPublishedDate <- skipLinesUntil ((space1_ *> parseGregorianDate)
+    baPublishedDate <- skipLinesUntil (space1_ *> parseGregorianDate) 
     space1_
-    baVol <- parseVol
+    baVol <- parseVol 
     space1_
-    baNumber <- parseNumber
-    baDUT1 <- skipLinesUntil parseDUT1
-    skipLinesUntil (seekToREOPHeader
-    baREOP <- parseREOPs
-    skipLinesUntil (seekToPEOPHeader
-    baPEOP <- parsePEOPs
-    skipLinesUntil (seekToNEOSHeader
-    baNEOS <- skipLinesUntil parseNEOSs
-    skipLinesUntil (seekToIAUHeader
-    baIAU <- skipLinesUntil parseIAUs
-    skipLines
+    baNumber <- parseNumber 
+    skipLine
+    baDUT1 <- skipLinesUntil parseDUT1 
+    skipLinesUntil seekToREOPHeader 
+    baREOP <- parseREOPs 
+    skipLinesUntil seekToPEOPHeader 
+    baPEOP <- parsePEOPs 
+    baNEOS <- seekAndParseNEOSs
+    baIAU <- seekAndParseIAUs
+    A.skipMany skipLine 
     A.endOfInput
     pure BulletinA{..}
+
+exba = A.parseOnly parseBulletinA <$> BC.readFile "./test-data/bulletina-xxxviii-041.txt"
