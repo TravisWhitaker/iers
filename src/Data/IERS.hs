@@ -24,7 +24,7 @@ import Data.Functor
 import qualified Data.IntMap.Strict as IM
 
 import Data.Time.Calendar
--- import Data.Time.Clock
+import Data.Time.Clock.TAI
 
 import GHC.Generics
 
@@ -212,6 +212,15 @@ queryEOP bas d =
                 e "REOP table lacked expected time range coverage" $
                     queryREOP <$> IM.lookup k baREOP
             | otherwise -> Left "absurd"
+
+
+toLeapSecondMap :: BulletinASet -> LeapSecondMap
+toLeapSecondMap bas =
+    let lsm = IM.fromList $
+              fmap (\BulletinA{..} ->
+                (dayToKey (clsValidFrom baLeapSeconds), baLeapSeconds)) $
+              IM.elems bas
+    in \d -> clsTAIMinusUTC . snd <$> IM.lookupLE (dayToKey d) lsm
 
 char_ :: Char -> A.Parser ()
 char_ = void . A.char
