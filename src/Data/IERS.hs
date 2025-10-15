@@ -24,9 +24,11 @@ import Data.Functor
 import qualified Data.IntMap.Strict as IM
 
 import Data.Time.Calendar
-import Data.Time.Clock
+-- import Data.Time.Clock
 
 import GHC.Generics
+
+import Network.HTTP.Req
 
 dayToKey :: Day -> IM.Key
 dayToKey (ModifiedJulianDay mjd) = fromIntegral mjd
@@ -48,6 +50,7 @@ data DUT1 = DUT1 {
     -- | UT1 - UTC in increments of 0.1s
   , dut1UT1MinusUTCDeciS :: Int
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -57,6 +60,7 @@ data CurrentLeapSeconds = CurrentLeapSeconds {
     -- | TAI - UTC in whole seconds.
   , clsTAIMinusUTC :: Int
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -76,6 +80,7 @@ data RapidEOP = RapidEOP {
     -- | seconds
   , reopUT1MinusUTCError :: Double
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -88,6 +93,7 @@ data PredictedEOP = PredictedEOP {
   , peopY :: Double
   , peopUT1MinusUTC :: Double
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -103,6 +109,7 @@ data NEOS = NEOS {
     -- | milliseconds of arc
   , neosDEpsilonError :: Double
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -118,6 +125,7 @@ data IAU = IAU {
     -- | milliseconds of arc
   , iauDYError :: Double
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -135,6 +143,7 @@ data BulletinA = BulletinA {
     -- | Only in newer reports.
   , baIAU :: IM.IntMap IAU
   } deriving stock ( Generic
+                   , Eq
                    , Show
                    )
     deriving anyclass Serialise
@@ -150,6 +159,59 @@ data EOPQueryResult = EOPQueryResult {
     -- | UT1 - UTC in seconds
   , eqrDUT :: Double
   } 
+
+queryREOP :: RapidEOP -> EOPQueryResult
+queryREOP RapidEOP{..} =
+    let eqrTime = reopDay
+        eqrX = reopX
+        eqrY = reopY
+        eqrDUT = reopUT1MinusUTC
+    in EOPQueryResult{..}
+
+queryPEOP :: PredictedEOP -> EOPQueryResult
+queryPEOP PredictedEOP{..} =
+    let eqrTime = peopDay
+        eqrX = peopX
+        eqrY = peopY
+        eqrDUT = peopUT1MinusUTC
+    in EOPQueryResult{..}
+
+-- We make a few assumptions here:
+-- - Data from more recent bulletins is better than data from older ones.
+-- - REOPs are better than PEOPs
+ 
+mostRecentEOP :: BulletinASet -> Maybe EOPQueryResult
+mostRecentEOP bas = do
+    BulletinA{..} <- snd <$> IM.lookupMax bas
+    queryREOP . snd <$> IM.lookupMax baREOP
+
+queryEOP :: BulletinASet -> Day -> Either String EOPQueryResult
+queryEOP bas d =
+    let e s = maybe (Left s) Right
+        k = dayToKey d
+        (ltb, eb, gtb) = IM.splitLookup k bas
+    in case eb of
+        Just BulletinA{..} ->
+            case IM.lookup k baREOP of
+                Just r -> pure (queryREOP r)
+                -- This is not supposed to happen. There are no bulletins in the
+                -- test data set that don't have their publication date in the
+                -- REOP table.
+                Nothing ->
+                    Left "REOP table did not contain its own publication date"
+        Nothing
+            -- day is after most recently published, so check REOPs then PEOPs
+            | IM.null gtb && not (IM.null ltb) -> do
+                BulletinA{..} <- snd <$> e "absurd" (IM.lookupMax ltb)
+                e "query beyond prediction range" $
+                    (queryREOP <$> IM.lookup k baREOP)
+                    <|> (queryPEOP <$> IM.lookup k baPEOP)
+            | IM.null gtb && IM.null ltb -> Left "table was empty"
+            | not (IM.null gtb) -> do
+                BulletinA{..} <- snd <$> e "absurd" (IM.lookupMin gtb)
+                e "REOP table lacked expected time range coverage" $
+                    queryREOP <$> IM.lookup k baREOP
+            | otherwise -> Left "absurd"
 
 char_ :: Char -> A.Parser ()
 char_ = void . A.char
@@ -508,4 +570,19 @@ parseBulletinA = do
     A.endOfInput
     pure BulletinA{..}
 
-exba = A.parseOnly parseBulletinA <$> BC.readFile "./test-data/bulletina-xxxviii-041.txt"
+fetchBulletinA :: IO BulletinA
+fetchBulletinA = do
+    response <- runReq defaultHttpConfig $ req
+      GET
+      (https "datacenter.iers.org"
+          /: "data"
+          /: "latestVersion"
+          /: "bulletinA.txt"
+      )
+      NoReqBody
+      bsResponse
+      mempty
+    let bs = responseBody response
+    case A.parseOnly parseBulletinA bs of
+        Left e -> fail e
+        Right b -> pure b

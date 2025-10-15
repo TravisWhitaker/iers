@@ -69,3 +69,22 @@ test-suite parse
                       -rtsopts
                       "-with-rtsopts=-N"
                       -Wno-all-missed-specialisations
+
+test-suite roundtrip
+    import:           common
+    type:             exitcode-stdio-1.0
+    hs-source-dirs:   test
+    main-is:          RoundTrip.hs
+    build-depends:    base >=4.14 && <5
+                    , async
+                    , attoparsec
+                    , bytestring
+                    , containers
+                    , directory
+                    , filepath
+                    , serialise
+                    , iers
+    ghc-options:      -threaded
+                      -rtsopts
+                      "-with-rtsopts=-N"
+                      -Wno-all-missed-specialisations
