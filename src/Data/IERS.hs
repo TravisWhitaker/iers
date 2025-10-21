@@ -237,10 +237,12 @@ double = A.signed (dub <|> A.double)
             string_ "."
             ibs' <- A.takeWhile1 A.isDigit
             let ibs = BC.dropWhileEnd (== '0') ibs'
-            i <- case BC.readInt ibs of
-                    Nothing -> fail "absurd"
-                    Just (x, bs) | BC.null bs -> pure x
-                                 | otherwise -> fail "absurd"
+            i <- if BC.null ibs
+                 then pure 0 -- all zeros, e.g. ".0"
+                 else case BC.readInt ibs of
+                        Nothing -> fail "absurd"
+                        Just (x, bs) | BC.null bs -> pure x
+                                     | otherwise -> fail "absurd"
             let pv = BC.length (BC.dropWhileEnd (== '0') ibs)
             pure (fromIntegral i / fromIntegral (10 ^ pv))
 
